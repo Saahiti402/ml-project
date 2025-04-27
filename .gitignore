@@ -181,3 +181,7 @@ venv/
 .DS_Store
 Thumbs.db
 
+
+.nx/installation
+.nx/cache
+.nx/workspace-data
