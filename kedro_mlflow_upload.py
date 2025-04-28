@@ -1,74 +1,94 @@
 import sys
 import subprocess
 import os
+import time
+import zipfile
 from datetime import datetime
 
-def install_package(package):
-    """Install a package using pip."""
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
-        print(f"✅ Successfully installed {package}")
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Error installing {package}: {e}")
-        raise
+import mlflow
+import shutil
+from datetime import datetime
+
 
 def install_dependencies():
-    """Ensure necessary dependencies are installed."""
-    install_package("mlflow")
-    install_package("kedro")
-    install_package("kedro-viz")
+    print("🔧 Installing dependencies from requirements.txt...")
+    subprocess.check_call(["pip3", "install", "-r", "requirements.txt"])
 
-def run_kedro_pipeline():
-    """Run the Kedro pipeline."""
-    try:
-        print("🚀 Running Kedro pipeline...")
-        subprocess.check_call(["kedro", "run"])
-        print("✅ Kedro pipeline ran successfully!")
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Error running Kedro pipeline: {e}")
-        raise
 
 def generate_kedro_viz():
-    """Generate Kedro visualization with a timestamped file."""
-    try:
-        print("🎨 Generating Kedro viz...")
+    print("📈 Generating Kedro pipeline visualization...")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = f"my_shareable_pipeline_{timestamp}"
+    os.makedirs(output_dir, exist_ok=True)
+    subprocess.check_call([
+        "kedro", "viz", "--save-file", os.path.join(output_dir, "pipeline.json")
+    ])
+    return output_dir
 
-        # Create a timestamped filename
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = f"my_shareable_pipeline_{timestamp}.json"
 
-        # Make sure the file or folder doesn't exist
-        if os.path.exists(output_file):
-            if os.path.isdir(output_file):
-                print(f"⚠️ Found a directory named {output_file}, deleting it...")
-                os.rmdir(output_file)
-            else:
-                print(f"⚠️ Found an old file named {output_file}, deleting it...")
-                os.remove(output_file)
+def compress_output(output_dir):
+    print("🗜️ Compressing the visualization directory...")
 
-        # Now run the command with the fresh filename
-        subprocess.check_call([
-            "kedro", "viz", "run", f"--save-file={output_file}"
-        ])
+    # Check if the directory exists before proceeding
+    if not os.path.exists(output_dir):
+        print(f"❌ Error: Directory {output_dir} does not exist!")
+        return None
 
-        print(f"✅ Kedro viz generated and saved to {output_file}")
+    zip_filename = f"{output_dir}.zip"
+    with zipfile.ZipFile(zip_filename, "w", zipfile.ZIP_DEFLATED) as zipf:
+        for root, dirs, files in os.walk(output_dir):
+            for file in files:
+                file_path = os.path.join(root, file)
+                arcname = os.path.relpath(file_path, start=output_dir)
+                print(f"Adding {file_path} as {arcname}")  # Debugging line
+                zipf.write(file_path, arcname)
 
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Error generating Kedro visualization: {e}")
-        raise
-    except Exception as e:
-        print(f"❌ Unexpected error: {e}")
-        raise
+    # Verify if the zip file was created
+    if os.path.exists(zip_filename):
+        print(f"✅ Successfully compressed into {zip_filename}")
+        return zip_filename
+    else:
+        print(f"❌ Failed to create zip file: {zip_filename}")
+        return None
+
+
+def upload_to_mlflow(zip_filename):
+    if zip_filename is None:
+        print("❌ No zip file to upload!")
+        return
+    print("🚀 Uploading the artifact to MLflow...")
+    mlflow.set_experiment("kedro_viz_artifacts")
+    with mlflow.start_run(run_name="kedro_viz_upload") as run:
+        mlflow.log_artifact(zip_filename, artifact_path="kedro_viz_output")
+    print(f"✅ Upload successful! Run ID: {run.info.run_id}")
+
+
+def clean_up(output_dir, zip_filename):
+    print("🧹 Cleaning up temporary files...")
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+    if os.path.exists(zip_filename):
+        os.remove(zip_filename)
+
 
 def main():
-    """Main function to orchestrate Kedro run, viz generation, and MLflow upload."""
     try:
         install_dependencies()
-        run_kedro_pipeline()
-        generate_kedro_viz()
-    except Exception as e:
-        print(f"❌ Fatal Error: {e}")
-        raise
+        output_dir = generate_kedro_viz()
+        zip_filename = compress_output(output_dir)
+        if zip_filename:
+            upload_to_mlflow(zip_filename)
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Subprocess failed: {e}")
+    except Exception as ex:
+        print(f"❌ An error occurred: {ex}")
+    finally:
+        # Always clean up even if error
+        try:
+            clean_up(output_dir, zip_filename)
+        except Exception:
+            pass
+
 
 if __name__ == "__main__":
     main()
